@@ -1,0 +1,14 @@
+{
+  "name": "student-management-system",
+  "version": "1.0.0",
+  "description": "Full-stack Student Management System with React, Vite, Express, and SQLite",
+  "private": true,
+  "scripts": {
+    "install:all": "npm install --prefix server && npm install --prefix client",
+    "postinstall": "npm install --prefix server && npm install --prefix client",
+    "build": "npm run build --prefix client",
+    "start": "node server/index.js",
+    "server": "npm run dev --prefix server",
+    "client": "npm run dev --prefix client"
+  }
+}
