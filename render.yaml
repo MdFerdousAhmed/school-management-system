@@ -1,0 +1,27 @@
+# Render.com Blueprint — deploys the full-stack app as a single Web Service
+services:
+  - type: web
+    name: student-management-system
+    runtime: node
+    plan: free
+    region: oregon
+
+    buildCommand: |
+      npm install --prefix server
+      npm install --prefix client
+      npm run build --prefix client
+
+    startCommand: node server/server.js
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: DB_NAME
+        value: /var/data/studentsdb
+
+    disk:
+      name: student-db
+      mountPath: /var/data
+      sizeGB: 1

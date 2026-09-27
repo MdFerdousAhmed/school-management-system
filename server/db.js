@@ -3,7 +3,8 @@ const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '.env') });
 
 const dbName = process.env.DB_NAME || 'studentsdb';
-const dbPath = path.resolve(__dirname, dbName);
+// Support absolute paths (e.g. /var/data/studentsdb on Render) or relative paths
+const dbPath = path.isAbsolute(dbName) ? dbName : path.resolve(__dirname, dbName);
 const db = new Database(dbPath);
 
 // Enable WAL mode for better concurrency and performance

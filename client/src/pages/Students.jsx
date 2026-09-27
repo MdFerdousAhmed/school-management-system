@@ -235,7 +235,7 @@ export default function Students() {
                   <div className="student-card-row">
                     <span className="student-card-label">GPA</span>
                     <span className={gpaClass(s.gpa)} style={{ fontSize: 12, padding: '2px 8px' }}>
-                      {s.gpa?.toFixed(2)}
+                      {s.gpa != null ? Number(s.gpa).toFixed(2) : '0.00'}
                     </span>
                   </div>
                   <div className="student-card-row">
@@ -318,7 +318,7 @@ export default function Students() {
                   <td style={{ fontSize: 12.5 }}>{s.department}</td>
                   <td style={{ fontSize: 12 }}>{s.year_level}</td>
                   <td>
-                    <span className={gpaClass(s.gpa)}>{s.gpa?.toFixed(2)}</span>
+                    <span className={gpaClass(s.gpa)}>{s.gpa != null ? Number(s.gpa).toFixed(2) : '0.00'}</span>
                   </td>
                   <td>
                     <StatusBadge status={s.status} studentId={s.id} onUpdated={fetchStudents} />
@@ -412,7 +412,7 @@ export default function Students() {
                   ['Date of Birth', viewStudent.dob || '—'],
                   ['Department', viewStudent.department],
                   ['Year Level', viewStudent.year_level],
-                  ['GPA', viewStudent.gpa?.toFixed(2)],
+                  ['GPA', viewStudent.gpa != null ? Number(viewStudent.gpa).toFixed(2) : '0.00'],
                   ['Registered', viewStudent.created_at ? new Date(viewStudent.created_at).toLocaleDateString() : '—'],
                 ].map(([label, value]) => (
                   <div key={label}>

@@ -62,10 +62,10 @@ export default function Dashboard() {
   );
 
   const statCards = [
-    { label: 'Total Students', value: stats.total,                      icon: '🎓', color: '#6366f1' },
-    { label: 'Active',         value: stats.active,                     icon: '✅', color: '#10b981' },
-    { label: 'Average GPA',    value: stats.avgGpa?.toFixed(2) ?? '—', icon: '📈', color: '#f59e0b' },
-    { label: 'Departments',    value: stats.departments?.length ?? 0,   icon: '🏛️', color: '#3b82f6' },
+    { label: 'Total Students', value: stats.total ?? 0,                                  icon: '🎓', color: '#6366f1' },
+    { label: 'Active',         value: stats.active ?? 0,                                 icon: '✅', color: '#10b981' },
+    { label: 'Average GPA',    value: stats.avgGpa != null ? Number(stats.avgGpa).toFixed(2) : '0.00', icon: '📈', color: '#f59e0b' },
+    { label: 'Departments',    value: stats.departments?.length ?? 0,                    icon: '🏛️', color: '#3b82f6' },
   ];
 
   return (
@@ -176,10 +176,10 @@ export default function Dashboard() {
         <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <h3 style={{ fontSize: 13.5, fontWeight: 600 }}>Quick Summary</h3>
           {[
-            { label: 'Inactive Students',  value: stats.total - stats.active,                                      color: 'var(--warning)' },
-            { label: 'Graduated',          value: stats.statuses.find(s => s.status === 'Graduated')?.count ?? 0,  color: 'var(--accent-light)' },
-            { label: 'On Leave',           value: stats.statuses.find(s => s.status === 'On Leave')?.count ?? 0,   color: 'var(--warning)' },
-            { label: 'Suspended',          value: stats.statuses.find(s => s.status === 'Suspended')?.count ?? 0,  color: 'var(--danger)' },
+            { label: 'Inactive Students',  value: (stats.total || 0) - (stats.active || 0),                             color: 'var(--warning)' },
+            { label: 'Graduated',          value: stats.statuses?.find(s => s.status === 'Graduated')?.count ?? 0,     color: 'var(--accent-light)' },
+            { label: 'On Leave',           value: stats.statuses?.find(s => s.status === 'On Leave')?.count ?? 0,      color: 'var(--warning)' },
+            { label: 'Suspended',          value: stats.statuses?.find(s => s.status === 'Suspended')?.count ?? 0,     color: 'var(--danger)' },
           ].map(item => (
             <div key={item.label} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{item.label}</span>
