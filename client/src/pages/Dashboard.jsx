@@ -111,8 +111,8 @@ export default function Dashboard() {
               <YAxis tick={{ fontSize: 10, fill: axisColor }} tickLine={false} axisLine={false} />
               <Tooltip content={<ChartTooltip />} cursor={{ fill: 'var(--accent-glow)' }} />
               <Bar dataKey="count" name="Students" radius={[4,4,0,0]}>
-                {stats.departments.map((_, i) => (
-                  <Cell key={i} fill={DEPT_COLORS[i % DEPT_COLORS.length]} />
+                {stats.departments.map((entry, i) => (
+                  <Cell key={`dept-${entry.department}`} fill={DEPT_COLORS[i % DEPT_COLORS.length]} />
                 ))}
               </Bar>
             </BarChart>
@@ -132,8 +132,8 @@ export default function Dashboard() {
                   cx="50%" cy="50%" innerRadius={42} outerRadius={68}
                   paddingAngle={3}
                 >
-                  {stats.statuses.map((s, i) => (
-                    <Cell key={i} fill={STATUS_COLORS[s.status] || '#94a3b8'} />
+                  {stats.statuses.map((s) => (
+                    <Cell key={`status-${s.status}`} fill={STATUS_COLORS[s.status] || '#94a3b8'} />
                   ))}
                 </Pie>
                 <Tooltip content={<ChartTooltip />} />

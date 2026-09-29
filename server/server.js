@@ -226,6 +226,60 @@ app.get('/api/students', async (req, res) => {
   }
 });
 
+// ─── Bulk Import ─────────────────────────────────────────────────────────────
+app.post('/api/students/bulk', async (req, res) => {
+  try {
+    const col = getStudentsCollection();
+    const { students } = req.body;
+    if (!Array.isArray(students) || students.length === 0) {
+      return res.status(400).json({ error: 'Payload must include an array of students' });
+    }
+
+    const now = new Date().toISOString();
+    const docs = [];
+    for (const s of students) {
+      let sid = s.student_id || await generateStudentId();
+      let gpa = parseFloat(s.gpa) || 0.0;
+      docs.push({
+        student_id: sid,
+        first_name: s.first_name,
+        last_name: s.last_name,
+        email: s.email ? s.email.trim().toLowerCase() : '',
+        phone: s.phone || '',
+        gender: s.gender || 'Other',
+        dob: s.dob || '',
+        department: s.department,
+        year_level: s.year_level,
+        gpa: gpa,
+        status: s.status || 'Active',
+        created_at: now,
+        updated_at: now,
+      });
+    }
+
+    const result = await col.insertMany(docs, { ordered: false });
+    res.json({
+      success: true,
+      message: `Successfully imported ${result.insertedCount} students`,
+      count: result.insertedCount,
+    });
+  } catch (err) {
+    console.error('Error bulk importing students:', err);
+    res.status(500).json({ error: 'Failed to bulk import: ' + err.message });
+  }
+});
+
+// ─── Reset Database to Sample Data ───────────────────────────────────────────
+app.post('/api/students/reset', async (req, res) => {
+  try {
+    await resetDatabase();
+    res.json({ success: true, message: 'Database reset to sample data' });
+  } catch (err) {
+    console.error('Error resetting database:', err);
+    res.status(500).json({ error: 'Failed to reset database: ' + err.message });
+  }
+});
+
 // ─── Single Student ──────────────────────────────────────────────────────────
 app.get('/api/students/:id', async (req, res) => {
   try {
@@ -447,59 +501,7 @@ app.delete('/api/students/:id', async (req, res) => {
   }
 });
 
-// ─── Bulk Import ─────────────────────────────────────────────────────────────
-app.post('/api/students/bulk', async (req, res) => {
-  try {
-    const col = getStudentsCollection();
-    const { students } = req.body;
-    if (!Array.isArray(students) || students.length === 0) {
-      return res.status(400).json({ error: 'Payload must include an array of students' });
-    }
-
-    const now = new Date().toISOString();
-    const docs = [];
-    for (const s of students) {
-      let sid = s.student_id || await generateStudentId();
-      let gpa = parseFloat(s.gpa) || 0.0;
-      docs.push({
-        student_id: sid,
-        first_name: s.first_name,
-        last_name: s.last_name,
-        email: s.email ? s.email.trim().toLowerCase() : '',
-        phone: s.phone || '',
-        gender: s.gender || 'Other',
-        dob: s.dob || '',
-        department: s.department,
-        year_level: s.year_level,
-        gpa: gpa,
-        status: s.status || 'Active',
-        created_at: now,
-        updated_at: now,
-      });
-    }
-
-    const result = await col.insertMany(docs, { ordered: false });
-    res.json({
-      success: true,
-      message: `Successfully imported ${result.insertedCount} students`,
-      count: result.insertedCount,
-    });
-  } catch (err) {
-    console.error('Error bulk importing students:', err);
-    res.status(500).json({ error: 'Failed to bulk import: ' + err.message });
-  }
-});
-
-// ─── Reset Database to Sample Data ───────────────────────────────────────────
-app.post('/api/students/reset', async (req, res) => {
-  try {
-    await resetDatabase();
-    res.json({ success: true, message: 'Database reset to sample data' });
-  } catch (err) {
-    console.error('Error resetting database:', err);
-    res.status(500).json({ error: 'Failed to reset database: ' + err.message });
-  }
-});
+// (bulk and reset routes moved above :id route)
 
 // ─── Export CSV ──────────────────────────────────────────────────────────────
 app.get('/api/export/csv', async (req, res) => {
@@ -564,19 +566,18 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Internal Server Error' });
 });
 
-// Start Server after connecting to MongoDB
+// Start Server
 async function startServer() {
+  app.listen(PORT, () => {
+    console.log(`🚀 Student Management System Backend listening on http://localhost:${PORT}`);
+  });
+
   try {
     await connectDB();
-    app.listen(PORT, () => {
-      console.log(`🚀 Student Management System Backend listening on http://localhost:${PORT}`);
-    });
   } catch (err) {
-    console.error('❌ Failed to start server:', err);
-    // Don't crash immediately in development if MongoDB isn't running locally yet; listen anyway so health check reports status
-    app.listen(PORT, () => {
-      console.log(`⚠️ Server running on http://localhost:${PORT} (Waiting for MongoDB connection...)`);
-    });
+    console.error('⚠️  MongoDB connection failed:', err.message);
+    console.log('👉 Please ensure MongoDB is running locally, OR add your MongoDB Atlas connection string in server/.env:');
+    console.log('   MONGODB_URI=mongodb+srv://<username>:<password>@cluster0.xxxxx.mongodb.net/studentsdb?retryWrites=true&w=majority\n');
   }
 }
 

@@ -2,10 +2,19 @@ const { MongoClient, ObjectId } = require('mongodb');
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '.env') });
 
-const uri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/studentsdb';
+const rawUri = process.env.MONGODB_URI || '';
 const dbName = process.env.DB_NAME || 'studentsdb';
 
-const client = new MongoClient(uri);
+// Validate URI before creating MongoClient to prevent crash on placeholder/missing value
+const isValidUri = rawUri.startsWith('mongodb://') || rawUri.startsWith('mongodb+srv://');
+if (!isValidUri) {
+  console.error('❌ MONGODB_URI is missing or invalid in server/.env');
+  console.error('👉 Please set a valid MongoDB connection string in server/.env:');
+  console.error('   MONGODB_URI=mongodb+srv://<user>:<pass>@cluster0.xxxxx.mongodb.net/studentsdb?retryWrites=true&w=majority\n');
+}
+
+const uri = isValidUri ? rawUri : 'mongodb://127.0.0.1:27017/studentsdb';
+const client = isValidUri ? new MongoClient(uri, { serverSelectionTimeoutMS: 5000 }) : null;
 
 let db = null;
 let studentsCollection = null;
@@ -368,6 +377,9 @@ async function resetDatabase() {
 
 async function connectDB() {
   if (db) return db;
+  if (!client) {
+    throw new Error('MongoDB client is not initialized. Please set a valid MONGODB_URI in server/.env');
+  }
   try {
     await client.connect();
     db = client.db(dbName);
@@ -405,9 +417,13 @@ function getDB() {
 
 function getStudentsCollection() {
   if (!studentsCollection) {
-    throw new Error('Database not connected. Please call connectDB() first.');
+    throw new Error('Database not connected. Please ensure MongoDB is running and MONGODB_URI is configured.');
   }
   return studentsCollection;
+}
+
+function isDbConnected() {
+  return !!db && !!studentsCollection;
 }
 
 module.exports = {
@@ -415,6 +431,7 @@ module.exports = {
   connectDB,
   getDB,
   getStudentsCollection,
+  isDbConnected,
   formatStudent,
   seedDatabase,
   resetDatabase,
