@@ -2,7 +2,7 @@ const { MongoClient, ObjectId } = require('mongodb');
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '.env') });
 
-const uri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017';
+const uri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/studentsdb';
 const dbName = process.env.DB_NAME || 'studentsdb';
 
 const client = new MongoClient(uri);
