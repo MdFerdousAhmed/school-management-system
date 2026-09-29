@@ -1,4 +1,4 @@
-# Render.com Blueprint — deploys the full-stack app as a single Web Service
+# Render.com Blueprint — deploys the app on the Free tier with MongoDB Atlas
 services:
   - type: web
     name: student-management-system
@@ -19,9 +19,6 @@ services:
       - key: PORT
         value: 10000
       - key: DB_NAME
-        value: /var/data/studentsdb
-
-    disk:
-      name: student-db
-      mountPath: /var/data
-      sizeGB: 1
+        value: studentsdb
+      - key: MONGODB_URI
+        sync: false

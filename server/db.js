@@ -1,42 +1,25 @@
-const Database = require('better-sqlite3');
+const { MongoClient, ObjectId } = require('mongodb');
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '.env') });
 
+const uri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017';
 const dbName = process.env.DB_NAME || 'studentsdb';
-// Support absolute paths (e.g. /var/data/studentsdb on Render) or relative paths
-const dbPath = path.isAbsolute(dbName) ? dbName : path.resolve(__dirname, dbName);
-const db = new Database(dbPath);
 
-// Enable WAL mode for better concurrency and performance
-db.pragma('journal_mode = WAL');
+const client = new MongoClient(uri);
 
-// Create students table
-db.exec(`
-  CREATE TABLE IF NOT EXISTS students (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    student_id TEXT UNIQUE NOT NULL,
-    first_name TEXT NOT NULL,
-    last_name TEXT NOT NULL,
-    email TEXT UNIQUE NOT NULL,
-    phone TEXT DEFAULT '',
-    gender TEXT DEFAULT 'Other',
-    dob TEXT DEFAULT '',
-    department TEXT NOT NULL,
-    year_level TEXT NOT NULL,
-    gpa REAL DEFAULT 0.0,
-    status TEXT DEFAULT 'Active',
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
+let db = null;
+let studentsCollection = null;
 
-  CREATE INDEX IF NOT EXISTS idx_students_dept ON students(department);
-  CREATE INDEX IF NOT EXISTS idx_students_status ON students(status);
-  CREATE INDEX IF NOT EXISTS idx_students_year ON students(year_level);
-  CREATE INDEX IF NOT EXISTS idx_students_student_id ON students(student_id);
-  CREATE INDEX IF NOT EXISTS idx_students_email ON students(email);
-`);
+// Helper: Ensure student object has `id` mapped from `_id` for frontend compatibility
+function formatStudent(doc) {
+  if (!doc) return null;
+  return {
+    ...doc,
+    id: doc._id.toString(),
+  };
+}
 
-// Sample data
+// 25 Sample Students
 const SAMPLE_STUDENTS = [
   {
     student_id: 'STU-2024-0001',
@@ -365,44 +348,76 @@ const SAMPLE_STUDENTS = [
   },
 ];
 
-function seedDatabase() {
-  const insert = db.prepare(`
-    INSERT INTO students (
-      student_id, first_name, last_name, email, phone,
-      gender, dob, department, year_level, gpa, status
-    ) VALUES (
-      @student_id, @first_name, @last_name, @email, @phone,
-      @gender, @dob, @department, @year_level, @gpa, @status
-    )
-  `);
+async function seedDatabase() {
+  const col = getStudentsCollection();
+  const now = new Date().toISOString();
+  const docs = SAMPLE_STUDENTS.map(s => ({
+    ...s,
+    created_at: now,
+    updated_at: now,
+  }));
+  await col.insertMany(docs);
+  console.log(` Seeded ${docs.length} sample students into MongoDB.`);
+}
 
-  const insertMany = db.transaction((students) => {
-    for (const student of students) {
-      insert.run(student);
+async function resetDatabase() {
+  const col = getStudentsCollection();
+  await col.deleteMany({});
+  await seedDatabase();
+}
+
+async function connectDB() {
+  if (db) return db;
+  try {
+    await client.connect();
+    db = client.db(dbName);
+    studentsCollection = db.collection('students');
+
+    // Create indexes
+    await studentsCollection.createIndex({ student_id: 1 }, { unique: true });
+    await studentsCollection.createIndex({ email: 1 }, { unique: true });
+    await studentsCollection.createIndex({ department: 1 });
+    await studentsCollection.createIndex({ status: 1 });
+    await studentsCollection.createIndex({ year_level: 1 });
+
+    const maskedUri = uri.replace(/\/\/[^@]+@/, '//***:***@');
+    console.log(` Connected to MongoDB (${dbName}) at ${maskedUri}`);
+
+    // Auto-seed if empty
+    const count = await studentsCollection.countDocuments();
+    if (count === 0) {
+      await seedDatabase();
     }
-  });
 
-  insertMany(SAMPLE_STUDENTS);
+    return db;
+  } catch (err) {
+    console.error('❌ MongoDB Connection Error:', err.message);
+    throw err;
+  }
 }
 
-function resetDatabase() {
-  const reset = db.transaction(() => {
-    db.prepare('DELETE FROM students').run();
-    db.prepare("DELETE FROM sqlite_sequence WHERE name = 'students'").run();
-    seedDatabase();
-  });
-  reset();
+function getDB() {
+  if (!db) {
+    throw new Error('Database not connected. Please call connectDB() first.');
+  }
+  return db;
 }
 
-// Auto-seed if empty
-const count = db.prepare('SELECT COUNT(*) as count FROM students').get().count;
-if (count === 0) {
-  seedDatabase();
+function getStudentsCollection() {
+  if (!studentsCollection) {
+    throw new Error('Database not connected. Please call connectDB() first.');
+  }
+  return studentsCollection;
 }
 
 module.exports = {
-  db,
+  client,
+  connectDB,
+  getDB,
+  getStudentsCollection,
+  formatStudent,
   seedDatabase,
   resetDatabase,
+  ObjectId,
   SAMPLE_STUDENTS,
 };

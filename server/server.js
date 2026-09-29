@@ -3,7 +3,14 @@ const path = require('path');
 const fs = require('fs');
 const express = require('express');
 const cors = require('cors');
-const { db, resetDatabase } = require('./db');
+const {
+  connectDB,
+  getDB,
+  getStudentsCollection,
+  formatStudent,
+  resetDatabase,
+  ObjectId,
+} = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -23,75 +30,98 @@ app.use((req, res, next) => {
   next();
 });
 
+// Helper: Build query to find student by either ObjectId or student_id
+function buildIdQuery(id) {
+  if (ObjectId.isValid(id) && String(new ObjectId(id)) === String(id)) {
+    return { $or: [{ _id: new ObjectId(id) }, { student_id: id }] };
+  }
+  return { student_id: id };
+}
+
 // Helper: Auto-generate student ID
-function generateStudentId() {
+async function generateStudentId() {
+  const col = getStudentsCollection();
   const year = new Date().getFullYear();
-  const row = db.prepare(`
-    SELECT student_id FROM students
-    WHERE student_id LIKE ?
-    ORDER BY id DESC LIMIT 1
-  `).get(`STU-${year}-%`);
+  const prefix = `STU-${year}-`;
+
+  const latest = await col
+    .find({ student_id: new RegExp(`^${prefix}`) })
+    .sort({ student_id: -1 })
+    .limit(1)
+    .toArray();
 
   let nextNum = 1;
-  if (row && row.student_id) {
-    const parts = row.student_id.split('-');
+  if (latest && latest.length > 0 && latest[0].student_id) {
+    const parts = latest[0].student_id.split('-');
     const lastNum = parseInt(parts[parts.length - 1], 10);
     if (!isNaN(lastNum)) {
       nextNum = lastNum + 1;
     }
   } else {
-    const countRow = db.prepare('SELECT COUNT(*) as total FROM students').get();
-    nextNum = (countRow ? countRow.total : 0) + 1;
+    const totalCount = await col.countDocuments();
+    nextNum = totalCount + 1;
   }
 
   // Ensure uniqueness
   while (true) {
-    const candidate = `STU-${year}-${String(nextNum).padStart(4, '0')}`;
-    const exists = db.prepare('SELECT id FROM students WHERE student_id = ?').get(candidate);
+    const candidate = `${prefix}${String(nextNum).padStart(4, '0')}`;
+    const exists = await col.findOne({ student_id: candidate });
     if (!exists) return candidate;
     nextNum++;
   }
 }
 
 // ─── Health Check ─────────────────────────────────────────────────────────────
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', uptime: process.uptime() });
+app.get('/api/health', async (req, res) => {
+  try {
+    const db = getDB();
+    await db.command({ ping: 1 });
+    res.json({ status: 'ok', database: 'connected', uptime: process.uptime() });
+  } catch (err) {
+    res.status(503).json({ status: 'degraded', database: 'disconnected', error: err.message });
+  }
 });
 
 // ─── Stats ────────────────────────────────────────────────────────────────────
-app.get('/api/stats', (req, res) => {
+app.get('/api/stats', async (req, res) => {
   try {
-    const totalRow = db.prepare('SELECT COUNT(*) as total FROM students').get();
-    const activeRow = db.prepare("SELECT COUNT(*) as active FROM students WHERE status = 'Active'").get();
-    const avgRow = db.prepare('SELECT AVG(gpa) as avgGpa FROM students').get();
+    const col = getStudentsCollection();
 
-    const deptRows = db.prepare(`
-      SELECT department, COUNT(*) as count
-      FROM students
-      GROUP BY department
-      ORDER BY count DESC
-    `).all();
+    const total = await col.countDocuments();
+    const active = await col.countDocuments({ status: 'Active' });
 
-    const statusRows = db.prepare(`
-      SELECT status, COUNT(*) as count
-      FROM students
-      GROUP BY status
-    `).all();
+    const avgResult = await col.aggregate([
+      { $match: { gpa: { $ne: null } } },
+      { $group: { _id: null, avgGpa: { $avg: '$gpa' } } },
+    ]).toArray();
+
+    const avgGpa = avgResult.length > 0 && avgResult[0].avgGpa !== null
+      ? Number(Number(avgResult[0].avgGpa).toFixed(2))
+      : 0;
+
+    const deptRows = await col.aggregate([
+      { $group: { _id: '$department', count: { $sum: 1 } } },
+      { $project: { _id: 0, department: '$_id', count: 1 } },
+      { $sort: { count: -1 } },
+    ]).toArray();
+
+    const statusRows = await col.aggregate([
+      { $group: { _id: '$status', count: { $sum: 1 } } },
+    ]).toArray();
 
     const ALL_STATUSES = ['Active', 'On Leave', 'Suspended', 'Graduated'];
-    const statusMap = Object.fromEntries(statusRows.map(r => [r.status, r.count]));
+    const statusMap = Object.fromEntries(statusRows.map(r => [r._id, r.count]));
     const statuses = ALL_STATUSES.map(s => ({
       status: s,
       count: statusMap[s] || 0,
     }));
 
+    const yearRows = await col.aggregate([
+      { $group: { _id: '$year_level', count: { $sum: 1 } } },
+    ]).toArray();
+
     const ALL_YEARS = ['1st Year', '2nd Year', '3rd Year', '4th Year', '5th Year'];
-    const yearRows = db.prepare(`
-      SELECT year_level, COUNT(*) as count
-      FROM students
-      GROUP BY year_level
-    `).all();
-    const yearMap = Object.fromEntries(yearRows.map(r => [r.year_level, r.count]));
+    const yearMap = Object.fromEntries(yearRows.map(r => [r._id, r.count]));
     const yearLevels = ALL_YEARS.map(y => ({
       year_level: y,
       count: yearMap[y] || 0,
@@ -100,9 +130,9 @@ app.get('/api/stats', (req, res) => {
     res.json({
       success: true,
       stats: {
-        total: totalRow ? totalRow.total : 0,
-        active: activeRow ? activeRow.active : 0,
-        avgGpa: avgRow && avgRow.avgGpa !== null ? Number(Number(avgRow.avgGpa).toFixed(2)) : 0,
+        total,
+        active,
+        avgGpa,
         departments: deptRows,
         statuses,
         yearLevels,
@@ -110,13 +140,14 @@ app.get('/api/stats', (req, res) => {
     });
   } catch (err) {
     console.error('Error fetching stats:', err);
-    res.status(500).json({ error: 'Failed to retrieve stats' });
+    res.status(500).json({ error: 'Failed to retrieve stats: ' + err.message });
   }
 });
 
 // ─── Students List (Search, Filter, Sort, Pagination) ────────────────────────
-app.get('/api/students', (req, res) => {
+app.get('/api/students', async (req, res) => {
   try {
+    const col = getStudentsCollection();
     const {
       q,
       department,
@@ -128,63 +159,56 @@ app.get('/api/students', (req, res) => {
       limit = 10,
     } = req.query;
 
+    const query = {};
+
+    if (q && q.trim()) {
+      const term = q.trim();
+      const regex = new RegExp(term, 'i');
+      query.$or = [
+        { first_name: regex },
+        { last_name: regex },
+        { email: regex },
+        { student_id: regex },
+        { phone: regex },
+      ];
+    }
+
+    if (department && department !== 'All') {
+      query.department = department;
+    }
+
+    if (year_level && year_level !== 'All') {
+      query.year_level = year_level;
+    }
+
+    if (status && status !== 'All') {
+      query.status = status;
+    }
+
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.max(1, Math.min(100, parseInt(limit, 10) || 10));
+    const skip = (pageNum - 1) * limitNum;
+
+    // Allowed sort fields
     const allowedSortFields = [
       'id', 'student_id', 'first_name', 'last_name',
       'email', 'department', 'year_level', 'gpa', 'status', 'created_at',
     ];
     const safeSortBy = allowedSortFields.includes(sort_by) ? sort_by : 'id';
-    const safeOrder = String(sort_order).toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+    const sortField = safeSortBy === 'id' ? '_id' : safeSortBy;
+    const sortOrderNum = String(sort_order).toUpperCase() === 'ASC' ? 1 : -1;
 
-    const pageNum = Math.max(1, parseInt(page, 10) || 1);
-    const limitNum = Math.max(1, Math.min(100, parseInt(limit, 10) || 10));
-    const offset = (pageNum - 1) * limitNum;
-
-    const conditions = [];
-    const params = [];
-
-    if (q && q.trim()) {
-      const term = `%${q.trim()}%`;
-      conditions.push(`(
-        first_name LIKE ? OR
-        last_name LIKE ? OR
-        email LIKE ? OR
-        student_id LIKE ? OR
-        phone LIKE ?
-      )`);
-      params.push(term, term, term, term, term);
-    }
-
-    if (department && department !== 'All') {
-      conditions.push('department = ?');
-      params.push(department);
-    }
-
-    if (year_level && year_level !== 'All') {
-      conditions.push('year_level = ?');
-      params.push(year_level);
-    }
-
-    if (status && status !== 'All') {
-      conditions.push('status = ?');
-      params.push(status);
-    }
-
-    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-
-    // Total matching records
-    const countSql = `SELECT COUNT(*) as total FROM students ${whereClause}`;
-    const totalRow = db.prepare(countSql).get(...params);
-    const total = totalRow ? totalRow.total : 0;
+    const total = await col.countDocuments(query);
     const totalPages = Math.max(1, Math.ceil(total / limitNum));
 
-    // Data query
-    const dataSql = `
-      SELECT * FROM students
-      ${whereClause}
-      ORDER BY ${safeSortBy} ${safeOrder}
-      LIMIT ? OFFSET ?
-    `;
-    const data = db.prepare(dataSql).all(...params, limitNum, offset);
+    const docs = await col
+      .find(query)
+      .sort({ [sortField]: sortOrderNum })
+      .skip(skip)
+      .limit(limitNum)
+      .toArray();
+
+    const data = docs.map(formatStudent);
 
     res.json({
       success: true,
@@ -198,28 +222,30 @@ app.get('/api/students', (req, res) => {
     });
   } catch (err) {
     console.error('Error fetching students:', err);
-    res.status(500).json({ error: 'Failed to retrieve students' });
+    res.status(500).json({ error: 'Failed to retrieve students: ' + err.message });
   }
 });
 
 // ─── Single Student ──────────────────────────────────────────────────────────
-app.get('/api/students/:id', (req, res) => {
+app.get('/api/students/:id', async (req, res) => {
   try {
-    const { id } = req.params;
-    const student = db.prepare('SELECT * FROM students WHERE id = ? OR student_id = ?').get(id, id);
+    const col = getStudentsCollection();
+    const student = await col.findOne(buildIdQuery(req.params.id));
     if (!student) {
       return res.status(404).json({ error: 'Student not found' });
     }
-    res.json({ success: true, data: student, ...student });
+    const formatted = formatStudent(student);
+    res.json({ success: true, data: formatted, ...formatted });
   } catch (err) {
     console.error('Error fetching student:', err);
-    res.status(500).json({ error: 'Failed to retrieve student' });
+    res.status(500).json({ error: 'Failed to retrieve student: ' + err.message });
   }
 });
 
 // ─── Create Student ──────────────────────────────────────────────────────────
-app.post('/api/students', (req, res) => {
+app.post('/api/students', async (req, res) => {
   try {
+    const col = getStudentsCollection();
     let {
       student_id,
       first_name,
@@ -251,17 +277,17 @@ app.post('/api/students', (req, res) => {
     }
 
     // Check duplicate email
-    const existingEmail = db.prepare('SELECT id FROM students WHERE LOWER(email) = ?').get(email);
+    const existingEmail = await col.findOne({ email });
     if (existingEmail) {
       return res.status(409).json({ error: 'A student with this email address already exists.' });
     }
 
     // Auto-generate or validate student_id
     if (!student_id || !student_id.trim()) {
-      student_id = generateStudentId();
+      student_id = await generateStudentId();
     } else {
       student_id = student_id.trim();
-      const existingId = db.prepare('SELECT id FROM students WHERE student_id = ?').get(student_id);
+      const existingId = await col.findOne({ student_id });
       if (existingId) {
         return res.status(409).json({ error: 'A student with this Student ID already exists.' });
       }
@@ -273,22 +299,25 @@ app.post('/api/students', (req, res) => {
     if (numGpa > 4.0) numGpa = 4.0;
     numGpa = Number(numGpa.toFixed(2));
 
-    const insertStmt = db.prepare(`
-      INSERT INTO students (
-        student_id, first_name, last_name, email, phone,
-        gender, dob, department, year_level, gpa, status
-      ) VALUES (
-        ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?, ?
-      )
-    `);
+    const now = new Date().toISOString();
+    const doc = {
+      student_id,
+      first_name,
+      last_name,
+      email,
+      phone: phone ? phone.trim() : '',
+      gender: gender || 'Other',
+      dob: dob || '',
+      department,
+      year_level,
+      gpa: numGpa,
+      status: status || 'Active',
+      created_at: now,
+      updated_at: now,
+    };
 
-    const info = insertStmt.run(
-      student_id, first_name, last_name, email, phone ? phone.trim() : '',
-      gender || 'Other', dob || '', department, year_level, numGpa, status || 'Active'
-    );
-
-    const newStudent = db.prepare('SELECT * FROM students WHERE id = ?').get(info.lastInsertRowid);
+    const result = await col.insertOne(doc);
+    const newStudent = formatStudent({ ...doc, _id: result.insertedId });
     res.status(201).json({ success: true, data: newStudent });
   } catch (err) {
     console.error('Error creating student:', err);
@@ -297,10 +326,11 @@ app.post('/api/students', (req, res) => {
 });
 
 // ─── Update Student ──────────────────────────────────────────────────────────
-app.put('/api/students/:id', (req, res) => {
+app.put('/api/students/:id', async (req, res) => {
   try {
+    const col = getStudentsCollection();
     const { id } = req.params;
-    const existing = db.prepare('SELECT * FROM students WHERE id = ?').get(id);
+    const existing = await col.findOne(buildIdQuery(id));
     if (!existing) {
       return res.status(404).json({ error: 'Student not found' });
     }
@@ -330,13 +360,13 @@ app.put('/api/students/:id', (req, res) => {
     email = email.trim().toLowerCase();
 
     // Check duplicate email (excluding current student)
-    const duplicateEmail = db.prepare('SELECT id FROM students WHERE LOWER(email) = ? AND id != ?').get(email, id);
+    const duplicateEmail = await col.findOne({ email, _id: { $ne: existing._id } });
     if (duplicateEmail) {
       return res.status(409).json({ error: 'Another student already has this email address.' });
     }
 
     student_id = student_id ? student_id.trim() : existing.student_id;
-    const duplicateId = db.prepare('SELECT id FROM students WHERE student_id = ? AND id != ?').get(student_id, id);
+    const duplicateId = await col.findOne({ student_id, _id: { $ne: existing._id } });
     if (duplicateId) {
       return res.status(409).json({ error: 'Another student already has this Student ID.' });
     }
@@ -346,31 +376,24 @@ app.put('/api/students/:id', (req, res) => {
     if (numGpa > 4.0) numGpa = 4.0;
     numGpa = Number(numGpa.toFixed(2));
 
-    const updateStmt = db.prepare(`
-      UPDATE students SET
-        student_id = ?,
-        first_name = ?,
-        last_name = ?,
-        email = ?,
-        phone = ?,
-        gender = ?,
-        dob = ?,
-        department = ?,
-        year_level = ?,
-        gpa = ?,
-        status = ?,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `);
+    const updateFields = {
+      student_id,
+      first_name,
+      last_name,
+      email,
+      phone: phone ? phone.trim() : '',
+      gender: gender || 'Other',
+      dob: dob || '',
+      department,
+      year_level,
+      gpa: numGpa,
+      status: status || 'Active',
+      updated_at: new Date().toISOString(),
+    };
 
-    updateStmt.run(
-      student_id, first_name, last_name, email, phone ? phone.trim() : '',
-      gender || 'Other', dob || '', department, year_level, numGpa, status || 'Active',
-      id
-    );
-
-    const updated = db.prepare('SELECT * FROM students WHERE id = ?').get(id);
-    res.json({ success: true, data: updated });
+    await col.updateOne({ _id: existing._id }, { $set: updateFields });
+    const updated = await col.findOne({ _id: existing._id });
+    res.json({ success: true, data: formatStudent(updated) });
   } catch (err) {
     console.error('Error updating student:', err);
     res.status(500).json({ error: 'Failed to update student: ' + err.message });
@@ -378,8 +401,9 @@ app.put('/api/students/:id', (req, res) => {
 });
 
 // ─── Patch Status ────────────────────────────────────────────────────────────
-app.patch('/api/students/:id/status', (req, res) => {
+app.patch('/api/students/:id/status', async (req, res) => {
   try {
+    const col = getStudentsCollection();
     const { id } = req.params;
     const { status } = req.body;
 
@@ -388,80 +412,78 @@ app.patch('/api/students/:id/status', (req, res) => {
       return res.status(400).json({ error: `Invalid status. Must be one of: ${validStatuses.join(', ')}` });
     }
 
-    const student = db.prepare('SELECT * FROM students WHERE id = ?').get(id);
-    if (!student) {
+    const existing = await col.findOne(buildIdQuery(id));
+    if (!existing) {
       return res.status(404).json({ error: 'Student not found' });
     }
 
-    db.prepare('UPDATE students SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(status, id);
-    const updated = db.prepare('SELECT * FROM students WHERE id = ?').get(id);
-
-    res.json({ success: true, data: updated });
+    await col.updateOne(
+      { _id: existing._id },
+      { $set: { status, updated_at: new Date().toISOString() } }
+    );
+    const updated = await col.findOne({ _id: existing._id });
+    res.json({ success: true, data: formatStudent(updated) });
   } catch (err) {
     console.error('Error patching status:', err);
-    res.status(500).json({ error: 'Failed to update student status' });
+    res.status(500).json({ error: 'Failed to update student status: ' + err.message });
   }
 });
 
 // ─── Delete Student ──────────────────────────────────────────────────────────
-app.delete('/api/students/:id', (req, res) => {
+app.delete('/api/students/:id', async (req, res) => {
   try {
+    const col = getStudentsCollection();
     const { id } = req.params;
-    const student = db.prepare('SELECT * FROM students WHERE id = ?').get(id);
-    if (!student) {
+    const existing = await col.findOne(buildIdQuery(id));
+    if (!existing) {
       return res.status(404).json({ error: 'Student not found' });
     }
 
-    db.prepare('DELETE FROM students WHERE id = ?').run(id);
+    await col.deleteOne({ _id: existing._id });
     res.json({ success: true, message: 'Student deleted successfully' });
   } catch (err) {
     console.error('Error deleting student:', err);
-    res.status(500).json({ error: 'Failed to delete student' });
+    res.status(500).json({ error: 'Failed to delete student: ' + err.message });
   }
 });
 
 // ─── Bulk Import ─────────────────────────────────────────────────────────────
-app.post('/api/students/bulk', (req, res) => {
+app.post('/api/students/bulk', async (req, res) => {
   try {
+    const col = getStudentsCollection();
     const { students } = req.body;
     if (!Array.isArray(students) || students.length === 0) {
       return res.status(400).json({ error: 'Payload must include an array of students' });
     }
 
-    const insert = db.prepare(`
-      INSERT INTO students (
-        student_id, first_name, last_name, email, phone,
-        gender, dob, department, year_level, gpa, status
-      ) VALUES (
-        @student_id, @first_name, @last_name, @email, @phone,
-        @gender, @dob, @department, @year_level, @gpa, @status
-      )
-    `);
+    const now = new Date().toISOString();
+    const docs = [];
+    for (const s of students) {
+      let sid = s.student_id || await generateStudentId();
+      let gpa = parseFloat(s.gpa) || 0.0;
+      docs.push({
+        student_id: sid,
+        first_name: s.first_name,
+        last_name: s.last_name,
+        email: s.email ? s.email.trim().toLowerCase() : '',
+        phone: s.phone || '',
+        gender: s.gender || 'Other',
+        dob: s.dob || '',
+        department: s.department,
+        year_level: s.year_level,
+        gpa: gpa,
+        status: s.status || 'Active',
+        created_at: now,
+        updated_at: now,
+      });
+    }
 
-    let imported = 0;
-    const insertMany = db.transaction((list) => {
-      for (const s of list) {
-        let sid = s.student_id || generateStudentId();
-        let gpa = parseFloat(s.gpa) || 0.0;
-        insert.run({
-          student_id: sid,
-          first_name: s.first_name,
-          last_name: s.last_name,
-          email: s.email,
-          phone: s.phone || '',
-          gender: s.gender || 'Other',
-          dob: s.dob || '',
-          department: s.department,
-          year_level: s.year_level,
-          gpa: gpa,
-          status: s.status || 'Active',
-        });
-        imported++;
-      }
+    const result = await col.insertMany(docs, { ordered: false });
+    res.json({
+      success: true,
+      message: `Successfully imported ${result.insertedCount} students`,
+      count: result.insertedCount,
     });
-
-    insertMany(students);
-    res.json({ success: true, message: `Successfully imported ${imported} students`, count: imported });
   } catch (err) {
     console.error('Error bulk importing students:', err);
     res.status(500).json({ error: 'Failed to bulk import: ' + err.message });
@@ -469,20 +491,21 @@ app.post('/api/students/bulk', (req, res) => {
 });
 
 // ─── Reset Database to Sample Data ───────────────────────────────────────────
-app.post('/api/students/reset', (req, res) => {
+app.post('/api/students/reset', async (req, res) => {
   try {
-    resetDatabase();
+    await resetDatabase();
     res.json({ success: true, message: 'Database reset to sample data' });
   } catch (err) {
     console.error('Error resetting database:', err);
-    res.status(500).json({ error: 'Failed to reset database' });
+    res.status(500).json({ error: 'Failed to reset database: ' + err.message });
   }
 });
 
 // ─── Export CSV ──────────────────────────────────────────────────────────────
-app.get('/api/export/csv', (req, res) => {
+app.get('/api/export/csv', async (req, res) => {
   try {
-    const students = db.prepare('SELECT * FROM students ORDER BY id ASC').all();
+    const col = getStudentsCollection();
+    const students = await col.find({}).sort({ created_at: 1 }).toArray();
 
     const escapeCSV = (str) => {
       if (str === null || str === undefined) return '';
@@ -497,7 +520,7 @@ app.get('/api/export/csv', (req, res) => {
     ];
 
     const rows = students.map(s => [
-      s.id,
+      s._id.toString(),
       escapeCSV(s.student_id),
       escapeCSV(s.first_name),
       escapeCSV(s.last_name),
@@ -541,7 +564,20 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Internal Server Error' });
 });
 
-// Start Server
-app.listen(PORT, () => {
-  console.log(`🚀 Student Management System Backend listening on http://localhost:${PORT}`);
-});
+// Start Server after connecting to MongoDB
+async function startServer() {
+  try {
+    await connectDB();
+    app.listen(PORT, () => {
+      console.log(`🚀 Student Management System Backend listening on http://localhost:${PORT}`);
+    });
+  } catch (err) {
+    console.error('❌ Failed to start server:', err);
+    // Don't crash immediately in development if MongoDB isn't running locally yet; listen anyway so health check reports status
+    app.listen(PORT, () => {
+      console.log(`⚠️ Server running on http://localhost:${PORT} (Waiting for MongoDB connection...)`);
+    });
+  }
+}
+
+startServer();
