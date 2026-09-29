@@ -9,6 +9,7 @@ const {
   getStudentsCollection,
   formatStudent,
   resetDatabase,
+  isDbConnected,
   ObjectId,
 } = require('./db');
 
@@ -19,6 +20,40 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Middleware: Auto-connect to DB in serverless/cloud environments
+app.use(async (req, res, next) => {
+  try {
+    if (!isDbConnected() && !req.path.startsWith('/favicon')) {
+      await connectDB();
+    }
+    next();
+  } catch (err) {
+    console.error('Database connection error in request:', err.message);
+    if (req.path === '/api/health' || req.path === '/') {
+      return next();
+    }
+    return res.status(503).json({
+      error: 'Database connection failed',
+      message: err.message,
+    });
+  }
+});
+
+// Root endpoint for API status
+app.get('/', (req, res) => {
+  res.json({
+    status: 'online',
+    service: 'Student Management System API',
+    database: isDbConnected() ? 'connected' : 'disconnected',
+    endpoints: {
+      health: '/api/health',
+      students: '/api/students',
+      stats: '/api/stats',
+      exportCSV: '/api/export/csv',
+    },
+  });
+});
 
 // Request logging in development
 app.use((req, res, next) => {
@@ -581,4 +616,12 @@ async function startServer() {
   }
 }
 
-startServer();
+// In Vercel serverless functions, export the Express app
+module.exports = app;
+
+if (!process.env.VERCEL) {
+  startServer();
+} else {
+  // Pre-warm DB connection on serverless startup
+  connectDB().catch(err => console.warn('Serverless DB initial connection:', err.message));
+}

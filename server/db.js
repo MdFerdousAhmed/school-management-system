@@ -14,7 +14,7 @@ if (!isValidUri) {
 }
 
 const uri = isValidUri ? rawUri : 'mongodb://127.0.0.1:27017/studentsdb';
-const client = isValidUri ? new MongoClient(uri, { serverSelectionTimeoutMS: 5000 }) : null;
+let client = isValidUri ? new MongoClient(uri, { serverSelectionTimeoutMS: 5000 }) : null;
 
 let db = null;
 let studentsCollection = null;
@@ -376,9 +376,15 @@ async function resetDatabase() {
 }
 
 async function connectDB() {
-  if (db) return db;
+  if (db && studentsCollection) return db;
+  
+  const currentUri = process.env.MONGODB_URI || rawUri;
   if (!client) {
-    throw new Error('MongoDB client is not initialized. Please set a valid MONGODB_URI in server/.env');
+    if (currentUri && (currentUri.startsWith('mongodb://') || currentUri.startsWith('mongodb+srv://'))) {
+      client = new MongoClient(currentUri, { serverSelectionTimeoutMS: 5000 });
+    } else {
+      throw new Error('MongoDB client is not initialized. Please configure MONGODB_URI in your environment variables.');
+    }
   }
   try {
     await client.connect();
